@@ -1,13 +1,13 @@
-name: Downloader
+name: Cloudflare Bypass M3U Downloader v2
 
 on:
   schedule:
     # 定時排程：每小時的第 0 分鐘自動執行一次 (UTC 時間)
     - cron: '0 * * * *'
-  workflow_dispatch: # 容許你隨時在 GitHub 後台手動「撳掣」即時測試
+  workflow_dispatch: # 容許你在 GitHub 後台手動「撳掣」即時測試
 
 permissions:
-  contents: write # 必須開啟寫入權限，否則無法發布到 Release
+  contents: write # 開啟寫入權限發布到 Release
 
 jobs:
   bypass_and_download:
@@ -24,73 +24,46 @@ jobs:
       with:
         python-version: '3.10'
 
-    # Step 3: 安裝瀏覽器自動化工具 Playwright 及其依賴
-    - name: Install Playwright & Dependencies
+    # Step 3: 安裝專門破 Cloudflare 防禦的 curl_cffi 套件
+    - name: Install curl_cffi
       run: |
-        pip install playwright
-        playwright install chromium --with-deps
+        pip install curl_cffi
 
-    # Step 4: 運行 Python 腳本，模擬真人瀏覽器繞過 Cloudflare 下載
+    # Step 4: 運行 Python 腳本，利用 TLS 瀏覽器指紋偽裝技術直接下載
     - name: Run Anti-Cloudflare Python Script
       run: |
         cat << 'EOF' > download.py
-        import asyncio
         import sys
-        from playwright.async_api import async_playwright
+        from curl_cffi import requests
 
-        async def main():
-            async with async_playwright() as p:
-                print("正在啟動微軟美國機房的 Chrome 瀏覽器...")
-                # 啟動 Chromium 瀏覽器
-                browser = await p.chromium.launch(headless=True)
-                
-                # 偽裝成普通 Windows 10 嘅 Chrome 瀏覽器指紋，防止被認出是機械人
-                context = await browser.new_context(
-                    user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-                    viewport={"width": 1920, "height": 1080}
-                )
-                page = await context.new_page()
-                
-                # 1. 先去對方網站的主域名，等 Cloudflare 進行安全檢查並植入安全 Cookie
-                base_url = "https://garyshare.sharewithyou.dpdns.org/"
-                print(f"第一步：前往首頁獲取 Cloudflare 信任: {base_url}")
-                await page.goto(base_url, wait_until="networkidle", timeout=60000)
-                
-                # 靜候 8 秒鐘，等可能出現的五秒盾自動跑完
-                print("等候 8 秒讓 Cloudflare 驗證盾通過...")
-                await asyncio.sleep(8)
-                
-                # 2. 瀏覽器已經取得信任，直接在頁面內利用 JavaScript 讀取 M3U 檔案內容
-                # 咁做可以完美避開瀏覽器直接彈出「另存新檔」視窗而卡死嘅問題
-                m3u_url = "https://garyshare.sharewithyou.dpdns.org/garyshare.m3u"
-                print(f"第二步：在受信任環境下內部抓取檔案: {m3u_url}")
-                
-                try:
-                    m3u_content = await page.evaluate('''async (url) => {
-                        const response = await fetch(url);
-                        return await response.text();
-                    }''', m3u_url)
-                except Exception as e:
-                    print(f"抓取失敗，錯誤訊息: {e}")
-                    sys.exit(1)
+        url = "https://garyshare.sharewithyou.dpdns.org/garyshare.m3u"
+        
+        print("正在啟動 TLS Fingerprint (Chrome) 偽裝技術衝過 Cloudflare...")
+        
+        try:
+            # impersonate="chrome" 會命令底層完美複製真實 Chrome 瀏覽器的 TLS 握手同 HTTP/2 特徵
+            response = requests.get(url, impersonate="chrome", timeout=30)
+            content = response.text
 
-                # 3. 檢查抓到嘅內容，確保唔係打回原形嘅驗證網頁
-                if "Just a moment..." in m3u_content or "challenge-running" in m3u_content:
-                    print("❌ 殘念！依然被 Cloudflare 強力防禦擋住，未能成功破盾。")
-                    sys.exit(1)
-                
-                if not m3u_content.strip():
-                    print("❌ 抓取到的檔案內容為空。")
-                    sys.exit(1)
-
-                # 4. 成功過關，將 M3U 內容寫入檔案
+            # IPTV 的 M3U 檔案標準開頭必定含有 #EXTM3U 關鍵字
+            if "#EXTM3U" in content:
                 with open("latest_file.m3u", "w", encoding="utf-8") as f:
-                    f.write(m3u_content)
+                    f.write(content)
+                print("🎯 🎯 恭喜！成功騙過 Cloudflare 盾，安全下載 M3U 檔案！")
                 
-                print("🎯 恭喜！成功破盾並安全下載 M3U 檔案！")
-                await browser.close()
-
-        asyncio.run(main())
+            elif "Just a moment..." in content or "challenge-running" in content:
+                print("❌ 殘念！依然被 Cloudflare 辨認出是自動化請求（中盾）。")
+                sys.exit(1)
+                
+            else:
+                print("❌ 雖然冇俾 Cloudflare 塞住，但返過嚟嘅內容好似唔係 M3U 格式。")
+                print("【調試資訊】網頁前 200 個字元內容如下：")
+                print(content[:200])
+                sys.exit(1)
+                
+        except Exception as e:
+            print(f"❌ 執行出錯: {e}")
+            sys.exit(1)
         EOF
         python download.py
 
@@ -100,7 +73,7 @@ jobs:
       with:
         tag: "latest"
         name: "最新自動下載檔案 (已成功破盾)"
-        body: "此檔案由 GitHub Actions 模擬真實美國瀏覽器，成功繞過 Cloudflare 驗證並自動更新。"
+        body: "此檔案由 GitHub Actions 使用 curl_cffi 偽裝真實瀏覽器 TLS 指紋自動更新。"
         artifacts: "latest_file.m3u"
         allowUpdates: true
         removeArtifacts: true
