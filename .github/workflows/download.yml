@@ -1,0 +1,42 @@
+name: US Automated Downloader
+
+on:
+  schedule:
+    # 定時排程：使用 Cron 語法。注意：GitHub 規定一定要用 UTC 世界標準時間！
+    # 香港時間 (HKT) 係 UTC + 8 小時。
+    # 範例一：下行代表「每小時的第 0 分鐘」自動行一次（最常用）
+    - cron: '0 * * * *'
+    
+    # 範例二：如果你想每日「香港時間凌晨 3:00」行一次，就要寫成 UTC 的前一天 19:00：
+    # - cron: '0 19 * * *'
+
+  workflow_dispatch: # 呢行代表容許你隨時隨地手動「撳掣」即時執行，方便測試。
+
+permissions:
+  contents: write # 確保有權限建立和覆蓋 Release
+
+jobs:
+  download_and_host:
+    runs-on: ubuntu-latest # 使用 GitHub 提供嘅免費 Ubuntu 美國伺服器
+
+    steps:
+    # Step 1: 用本地 curl 下載目標檔案 (天然自帶美國 IP)
+    - name: Download File via US IP
+      run: |
+        # 【請將下面條 Link 改做你想下載嘅真正網址】
+        TARGET_URL="https://garyshare.sharewithyou.dpdns.org/garyshare.m3u"
+        
+        # 開始下載，命名為 latest_file.zip
+        curl -s -L "$TARGET_URL" -o "latest.m3u"
+
+    # Step 2: 將下載好嘅檔案發布去 GitHub Releases，並永遠覆蓋舊檔
+    - name: Upload and Replace File to Release
+      uses: ncipollo/release-action@v1
+      with:
+        tag: "latest"                  # 永遠固定用 "latest" 這個 Tag
+        name: "最新自動下載檔案"
+        body: "此檔案由 GitHub Actions 定時使用美國 IP 自動抓取並更新。"
+        artifacts: "latest.m3u"        # 要上傳嘅檔案名稱
+        allowUpdates: true             # 容許覆蓋舊版
+        removeArtifacts: true          # 覆蓋時先刪除舊檔案
+        replacesArtifacts: true        # 確認替換舊檔案
