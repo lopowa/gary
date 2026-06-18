@@ -13,12 +13,12 @@ jobs:
     - name: Download File using US IP
       run: |
         # 用 curl 下載檔案
-        curl -s -L "https://example.com/blocked-file.zip" -o "latest_file.zip"
+        curl -s -L "https://garyshare.sharewithyou.dpdns.org/garyshare.m3u" -o "latest.m3u"
         
-    - name: Upload to GitHub Releases (放上網)
+    - name: Upload to GitHub Releases
       uses: softprops/action-gh-release@v1
       with:
         tag_name: latest
-        files: latest_file.zip
+        files: latest.m3u
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
