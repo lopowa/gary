@@ -1,0 +1,24 @@
+name: Scheduled US Download
+
+on:
+  schedule:
+    - cron: '0 * * * *'  # 每個小時嘅第 0 分鐘自動執行 (UTC 時間)
+  workflow_dispatch:      # 容許你手動點擊按鈕即時測試
+
+jobs:
+  download_and_publish:
+    runs-on: ubuntu-latest  # 使用 GitHub 的美國 Ubuntu 伺服器
+    
+    steps:
+    - name: Download File using US IP
+      run: |
+        # 用 curl 下載檔案
+        curl -s -L "https://example.com/blocked-file.zip" -o "latest_file.zip"
+        
+    - name: Upload to GitHub Releases (放上網)
+      uses: softprops/action-gh-release@v1
+      with:
+        tag_name: latest
+        files: latest_file.zip
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
