@@ -1,42 +1,107 @@
-name: US Automated Downloader
+name: Downloader
 
 on:
   schedule:
-    # 定時排程：使用 Cron 語法。注意：GitHub 規定一定要用 UTC 世界標準時間！
-    # 香港時間 (HKT) 係 UTC + 8 小時。
-    # 範例一：下行代表「每小時的第 0 分鐘」自動行一次（最常用）
+    # 定時排程：每小時的第 0 分鐘自動執行一次 (UTC 時間)
     - cron: '0 * * * *'
-    
-    # 範例二：如果你想每日「香港時間凌晨 3:00」行一次，就要寫成 UTC 的前一天 19:00：
-    # - cron: '0 19 * * *'
-
-  workflow_dispatch: # 呢行代表容許你隨時隨地手動「撳掣」即時執行，方便測試。
+  workflow_dispatch: # 容許你隨時在 GitHub 後台手動「撳掣」即時測試
 
 permissions:
-  contents: write # 確保有權限建立和覆蓋 Release
+  contents: write # 必須開啟寫入權限，否則無法發布到 Release
 
 jobs:
-  download_and_host:
-    runs-on: ubuntu-latest # 使用 GitHub 提供嘅免費 Ubuntu 美國伺服器
+  bypass_and_download:
+    runs-on: ubuntu-latest # 使用 GitHub 提供嘅免費美國 Ubuntu 伺服器
 
     steps:
-    # Step 1: 用本地 curl 下載目標檔案 (天然自帶美國 IP)
-    - name: Download File via US IP
-      run: |
-        # 【請將下面條 Link 改做你想下載嘅真正網址】
-        TARGET_URL="https://garyshare.sharewithyou.dpdns.org/garyshare.m3u"
-        
-        # 開始下載，命名為 latest_file.zip
-        curl -s -L "$TARGET_URL" -o "latest.m3u"
+    # Step 1: 複製倉庫檔案
+    - name: Checkout Repository
+      uses: actions/checkout@v4
 
-    # Step 2: 將下載好嘅檔案發布去 GitHub Releases，並永遠覆蓋舊檔
-    - name: Upload and Replace File to Release
+    # Step 2: 安裝 Python 環境
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.10'
+
+    # Step 3: 安裝瀏覽器自動化工具 Playwright 及其依賴
+    - name: Install Playwright & Dependencies
+      run: |
+        pip install playwright
+        playwright install chromium --with-deps
+
+    # Step 4: 運行 Python 腳本，模擬真人瀏覽器繞過 Cloudflare 下載
+    - name: Run Anti-Cloudflare Python Script
+      run: |
+        cat << 'EOF' > download.py
+        import asyncio
+        import sys
+        from playwright.async_api import async_playwright
+
+        async def main():
+            async with async_playwright() as p:
+                print("正在啟動微軟美國機房的 Chrome 瀏覽器...")
+                # 啟動 Chromium 瀏覽器
+                browser = await p.chromium.launch(headless=True)
+                
+                # 偽裝成普通 Windows 10 嘅 Chrome 瀏覽器指紋，防止被認出是機械人
+                context = await browser.new_context(
+                    user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+                    viewport={"width": 1920, "height": 1080}
+                )
+                page = await context.new_page()
+                
+                # 1. 先去對方網站的主域名，等 Cloudflare 進行安全檢查並植入安全 Cookie
+                base_url = "https://garyshare.sharewithyou.dpdns.org/"
+                print(f"第一步：前往首頁獲取 Cloudflare 信任: {base_url}")
+                await page.goto(base_url, wait_until="networkidle", timeout=60000)
+                
+                # 靜候 8 秒鐘，等可能出現的五秒盾自動跑完
+                print("等候 8 秒讓 Cloudflare 驗證盾通過...")
+                await asyncio.sleep(8)
+                
+                # 2. 瀏覽器已經取得信任，直接在頁面內利用 JavaScript 讀取 M3U 檔案內容
+                # 咁做可以完美避開瀏覽器直接彈出「另存新檔」視窗而卡死嘅問題
+                m3u_url = "https://garyshare.sharewithyou.dpdns.org/garyshare.m3u"
+                print(f"第二步：在受信任環境下內部抓取檔案: {m3u_url}")
+                
+                try:
+                    m3u_content = await page.evaluate('''async (url) => {
+                        const response = await fetch(url);
+                        return await response.text();
+                    }''', m3u_url)
+                except Exception as e:
+                    print(f"抓取失敗，錯誤訊息: {e}")
+                    sys.exit(1)
+
+                # 3. 檢查抓到嘅內容，確保唔係打回原形嘅驗證網頁
+                if "Just a moment..." in m3u_content or "challenge-running" in m3u_content:
+                    print("❌ 殘念！依然被 Cloudflare 強力防禦擋住，未能成功破盾。")
+                    sys.exit(1)
+                
+                if not m3u_content.strip():
+                    print("❌ 抓取到的檔案內容為空。")
+                    sys.exit(1)
+
+                # 4. 成功過關，將 M3U 內容寫入檔案
+                with open("latest_file.m3u", "w", encoding="utf-8") as f:
+                    f.write(m3u_content)
+                
+                print("🎯 恭喜！成功破盾並安全下載 M3U 檔案！")
+                await browser.close()
+
+        asyncio.run(main())
+        EOF
+        python download.py
+
+    # Step 5: 將下載好嘅最新 m3u 檔案推上 GitHub Releases 放上網
+    - name: Upload and Host File on GitHub Release
       uses: ncipollo/release-action@v1
       with:
-        tag: "latest"                  # 永遠固定用 "latest" 這個 Tag
-        name: "最新自動下載檔案"
-        body: "此檔案由 GitHub Actions 定時使用美國 IP 自動抓取並更新。"
-        artifacts: "latest.m3u"        # 要上傳嘅檔案名稱
-        allowUpdates: true             # 容許覆蓋舊版
-        removeArtifacts: true          # 覆蓋時先刪除舊檔案
-        replacesArtifacts: true        # 確認替換舊檔案
+        tag: "latest"
+        name: "最新自動下載檔案 (已成功破盾)"
+        body: "此檔案由 GitHub Actions 模擬真實美國瀏覽器，成功繞過 Cloudflare 驗證並自動更新。"
+        artifacts: "latest_file.m3u"
+        allowUpdates: true
+        removeArtifacts: true
+        replacesArtifacts: true
