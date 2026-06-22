@@ -1,4 +1,4 @@
-name: Cloudflare Bypass M3U Downloader v2
+name: IPTV Player Bypass M3U Downloader
 
 on:
   schedule:
@@ -24,46 +24,59 @@ jobs:
       with:
         python-version: '3.10'
 
-    # Step 3: 安裝專門破 Cloudflare 防禦的 curl_cffi 套件
+    # Step 3: 安裝連線套件
     - name: Install curl_cffi
       run: |
         pip install curl_cffi
 
-    # Step 4: 運行 Python 腳本，利用 TLS 瀏覽器指紋偽裝技術直接下載
+    # Step 4: 運行 Python 腳本，輪流使用 IPTV 播放器嘅特徵去闖關
     - name: Run Anti-Cloudflare Python Script
       run: |
         cat << 'EOF' > download.py
         import sys
         from curl_cffi import requests
 
-        # 這裡已經更新為帶有 token 的最新網址
         url = "https://garyshare.sharewithyou.dpdns.org/garyshare.m3u?token=worldcup2026"
         
-        print("正在啟動 TLS Fingerprint (Chrome) 偽裝技術衝過 Cloudflare (使用新網址)...")
+        # 準備一堆常見嘅 IPTV 播放器 User-Agent 進行輪流測試
+        user_agents = [
+            "APTV",                                                             # 優先測試佢推薦嘅 APTV
+            "NanoTV",                                                           # 佢推薦嘅 NanoTV
+            "VLC/3.0.18 LibVLC/3.0.18",                                         # 最經典嘅 VLC 播放器
+            "AppleCoreMedia/1.0.0.21G72 (Apple TV; U; CPU OS 17_5_1 like Mac OS X)" # Apple TV 串流引擎特徵
+        ]
         
-        try:
-            # impersonate="chrome" 會命令底層完美複製真實 Chrome 瀏覽器的 TLS 握手同 HTTP/2 特徵
-            response = requests.get(url, impersonate="chrome", timeout=30)
-            content = response.text
+        success = False
+        content = ""
 
-            # IPTV 的 M3U 檔案標準開頭必定含有 #EXTM3U 關鍵字
-            if "#EXTM3U" in content:
-                with open("latest_file.m3u", "w", encoding="utf-8") as f:
-                    f.write(content)
-                print("🎯 🎯 恭喜！成功用新網址騙過 Cloudflare 盾，安全下載 M3U 檔案！")
-                
-            elif "Just a moment..." in content or "challenge-running" in content:
-                print("❌ 殘念！依然被 Cloudflare 辨認出是自動化請求（中盾）。")
-                sys.exit(1)
-                
-            else:
-                print("❌ 雖然冇俾 Cloudflare 塞住，但返過嚟嘅內容好似唔係 M3U 格式。")
-                print("【調試資訊】網頁前 200 個字元內容如下：")
-                print(content[:200])
-                sys.exit(1)
-                
-        except Exception as e:
-            print(f"❌ 執行出錯: {e}")
+        for ua in user_agents:
+            print(f"正在嘗試使用播放器特徵偽裝連線: {ua}")
+            try:
+                # 注意：呢度特登拎走左 impersonate="chrome"，因為我哋唔要扮 Chrome 瀏覽器！
+                # 我哋要純淨嘅連線加上播放器嘅 User-Agent 標頭
+                headers = {
+                    "User-Agent": ua,
+                    "Accept": "*/*",
+                    "Connection": "keep-alive"
+                }
+                response = requests.get(url, headers=headers, timeout=20)
+                content = response.text
+
+                # 如果回傳內容有 IPTV M3U 必備嘅標準開頭 #EXTM3U，即代表成功繞過
+                if "#EXTM3U" in content:
+                    print(f"🎯 成功！網站對 [{ua}] 亮起綠燈，已順利取得 M3U 檔案！")
+                    success = True
+                    break
+                else:
+                    print("   ⚠️ 失敗，返過嚟嘅依然係網頁內容而非 M3U（可能此 UA 未被放行）。")
+            except Exception as e:
+                print(f"   ❌ 連線期間發生錯誤: {e}")
+
+        if success:
+            with open("latest_file.m3u", "w", encoding="utf-8") as f:
+                f.write(content)
+        else:
+            print("❌ 慘情！所有播放器偽裝指紋都被 Cloudflare 擋落黎。")
             sys.exit(1)
         EOF
         python download.py
@@ -74,7 +87,7 @@ jobs:
       with:
         tag: "latest"
         name: "最新自動下載檔案 (已成功破盾)"
-        body: "此檔案由 GitHub Actions 使用 curl_cffi 偽裝真實瀏覽器 TLS 指紋自動更新。"
+        body: "此檔案由 GitHub Actions 偽裝成 APTV/NanoTV 播放器，成功繞過瀏覽器封鎖並自動更新。"
         artifacts: "latest_file.m3u"
         allowUpdates: true
         removeArtifacts: true
