@@ -1,61 +1,80 @@
-name: M3U Downloader (Standard V2 Mode)
+name: Cloudflare Bypass M3U Downloader v2
 
 on:
   schedule:
-    - cron: '0 * * * *' # 每小時自動執行一次
-  workflow_dispatch: # 容許你在 GitHub 網頁上手動點擊 Run 執行
+    # 定時排程：每小時的第 0 分鐘自動執行一次 (UTC 時間)
+    - cron: '0 * * * *'
+  workflow_dispatch: # 容許你在 GitHub 後台手動「撳掣」即時測試
 
 permissions:
-  contents: write
+  contents: write # 開啟寫入權限發布到 Release
 
 jobs:
-  download_job:
-    runs-on: ubuntu-latest
+  bypass_and_download:
+    runs-on: ubuntu-latest # 使用 GitHub 提供嘅免費美國 Ubuntu 伺服器
 
     steps:
+    # Step 1: 複製倉庫檔案
     - name: Checkout Repository
       uses: actions/checkout@v4
 
-    - name: Check Runner IP
-      run: |
-        echo "=== 當前 GitHub Actions 伺服器出口 IP ==="
-        curl -s https://ifconfig.me
-        echo -e "\n======================================="
+    # Step 2: 安裝 Python 環境
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.10'
 
-    - name: Download M3U File
+    # Step 3: 安裝專門破 Cloudflare 防禦的 curl_cffi 套件
+    - name: Install curl_cffi
       run: |
-        # 1. 設定帶有最新 Token 嘅目標網址
-        URL="https://garyshare.sharewithyou.dpdns.org/garyshare.m3u?token=worldcup2026"
-        
-        # 2. 設定常規播放器 User-Agent 特徵
-        UA="VLC/3.0.18 LibVLC/3.0.18"
-        
-        echo "正在發送標準 HTTP 請求至目標伺服器..."
-        
-        # 3. 執行常規下載
-        curl -s -L -A "$UA" --max-time 30 "$URL" > result_file.m3u
+        pip install curl_cffi
 
-    - name: Verify Content and Save
+    # Step 4: 運行 Python 腳本，利用 TLS 瀏覽器指紋偽裝技術直接下載
+    - name: Run Anti-Cloudflare Python Script
       run: |
-        # 檢查回傳內容是否包含 M3U 標頭
-        if grep -q "#EXTM3U" result_file.m3u; then
-          echo "🎯 成功：成功獲取正確的 M3U 檔案結構！"
-          mv result_file.m3u latest_file.m3u
-        else
-          echo "⚠️ 警告：回傳內容不符合 M3U 格式。"
-          echo "=== 回傳內容前 10 行節錄 ==="
-          head -n 10 result_file.m3u
-          echo "============================"
-          # 依然保留檔案更名，方便你稍後在 Release 下載下來查看完整的 HTML 報錯頁面
-          mv result_file.m3u latest_file.m3u
-        fi
+        cat << 'EOF' > download.py
+        import sys
+        from curl_cffi import requests
 
-    - name: Push to GitHub Release
+        # 這裡已經更新為帶有 token 的最新網址
+        url = "https://garyshare.sharewithyou.dpdns.org/garyshare.m3u?token=worldcup2026"
+        
+        print("正在啟動 TLS Fingerprint (Chrome) 偽裝技術衝過 Cloudflare (使用新網址)...")
+        
+        try:
+            # impersonate="chrome" 會命令底層完美複製真實 Chrome 瀏覽器的 TLS 握手同 HTTP/2 特徵
+            response = requests.get(url, impersonate="chrome", timeout=30)
+            content = response.text
+
+            # IPTV 的 M3U 檔案標準開頭必定含有 #EXTM3U 關鍵字
+            if "#EXTM3U" in content:
+                with open("latest_file.m3u", "w", encoding="utf-8") as f:
+                    f.write(content)
+                print("🎯 🎯 恭喜！成功用新網址騙過 Cloudflare 盾，安全下載 M3U 檔案！")
+                
+            elif "Just a moment..." in content or "challenge-running" in content:
+                print("❌ 殘念！依然被 Cloudflare 辨認出是自動化請求（中盾）。")
+                sys.exit(1)
+                
+            else:
+                print("❌ 雖然冇俾 Cloudflare 塞住，但返過嚟嘅內容好似唔係 M3U 格式。")
+                print("【調試資訊】網頁前 200 個字元內容如下：")
+                print(content[:200])
+                sys.exit(1)
+                
+        except Exception as e:
+            print(f"❌ 執行出錯: {e}")
+            sys.exit(1)
+        EOF
+        python download.py
+
+    # Step 5: 將下載好嘅最新 m3u 檔案推上 GitHub Releases 放上網
+    - name: Upload and Host File on GitHub Release
       uses: ncipollo/release-action@v1
       with:
         tag: "latest"
-        name: "M3U 自動更新測試"
-        body: "基於標準環境獲取的最新測試檔案。"
+        name: "最新自動下載檔案 (已成功破盾)"
+        body: "此檔案由 GitHub Actions 使用 curl_cffi 偽裝真實瀏覽器 TLS 指紋自動更新。"
         artifacts: "latest_file.m3u"
         allowUpdates: true
         removeArtifacts: true
