@@ -1,98 +1,74 @@
-name: Cloudflare Bypass M3U Downloader v5 (WARP + Player Mode)
+name: Cloudflare Bypass M3U Downloader v6 (Tor + Player Mode)
 
 on:
   schedule:
-    # 定時排程：每小時的第 0 分鐘自動執行一次
-    - cron: '0 * * * *'
-  workflow_dispatch: # 容許你隨時手動撳掣測試
+    - cron: '0 * * * *' # 每小時自動執行
+  workflow_dispatch: # 容許手動執行
 
 permissions:
-  contents: write # 開啟寫入權限發布到 Release
+  contents: write
 
 jobs:
-  warp_player_download:
-    runs-on: ubuntu-latest # 使用 GitHub 免費伺服器
+  tor_player_download:
+    runs-on: ubuntu-latest
 
     steps:
-    # Step 1: 複製倉庫檔案
     - name: Checkout Repository
       uses: actions/checkout@v4
 
-    # Step 2: 安裝並啟動 Cloudflare WARP 代理，將機房 IP 徹底洗白
-    - name: Install and Setup Cloudflare WARP
+    # Step 2: 安裝 Tor 並設定指定由「美國」節點出網
+    - name: Install and Configure Tor (Force US Exit Nodes)
       run: |
-        # 1. 導入 Cloudflare WARP 官方儲存庫
-        curl -fsSL https://pkg.cloudflareclient.com/pubkey.gpg | sudo gpg --yes --dearmor -o /usr/share/keyrings/cloudflare-warp-archive-keyring.gpg
-        echo "deb [signed-by=/usr/share/keyrings/cloudflare-warp-archive-keyring.gpg] https://pkg.cloudflareclient.com/ $(lsb_release -cs) main" | sudo tee /etc/apt/sources.list.d/cloudflare-client.list
+        sudo apt-get update && sudo apt-get install tor -y
         
-        # 2. 安裝 WARP 客戶端
-        sudo apt-get update && sudo apt-get install cloudflare-warp -y
+        # 強制 Tor 只使用美國 (us) 的出口節點
+        echo "ExitNodes {us}" | sudo tee -a /etc/tor/torrc
+        echo "StrictNodes 1" | sudo tee -a /etc/tor/torrc
         
-        # 3. 確保 WARP 系統服務已啟動
-        sudo systemctl start warp-svc
+        # 啟動 Tor 服務 (默認會監聽本地 127.0.0.1:9050)
+        sudo systemctl restart tor
         
-        # 4. 初始化 WARP 並設定為本地 SOCKS5 代理模式 (Port 4000)
-        warp-cli --accept-tos registration new || warp-cli --accept-tos register
-        warp-cli --accept-tos mode proxy
-        warp-cli --accept-tos connect
-        
-        # 5. 等候 5 秒讓虛擬網絡連線穩定
-        sleep 5
-        
-        # 6. 測試一下經 WARP 代理出去嘅 IP 係咪成功轉咗
-        echo "【檢查點】經 WARP 代理出去的出口 IP 為："
-        curl -s --proxy socks5h://127.0.0.1:4000 https://ifconfig.me
+        # 等候 Tor 建立好全球加密迴路 (通常需要 15-30 秒)
+        echo "正在等待 Tor 網絡建立連線..."
+        sleep 20
+
+    # Step 3: 檢查經 Tor 出去嘅 IP 係咪變咗做非微軟嘅美國 IP
+    - name: Test Tor IP Connection
+      run: |
+        echo "【檢查點】經由 Tor 節點出去的偽裝 IP 為："
+        curl -s --proxy socks5h://127.0.0.1:9050 https://ifconfig.me || echo "Tor 暫時未準備好"
         echo ""
 
-    # Step 3: 透過 WARP 密道，輪流用播放器身分強攻下載
-    - name: Download M3U via WARP with Player User-Agent
+    # Step 4: 透過 Tor 美國住宅特徵節點 + 播放器 User-Agent 強攻下載
+    - name: Download M3U via Tor with Player User-Agent
       run: |
         URL="https://garyshare.sharewithyou.dpdns.org/garyshare.m3u"
-        PROXY="socks5h://127.0.0.1:4000"
+        PROXY="socks5h://127.0.0.1:9050"
         
-        # 模擬真正 IPTV 播放器嘅 User-Agent 名單
-        UAS=(
-          "VLC/3.0.18 LibVLC/3.0.18"
-          "Lavf/58.76.100"
-          "TiviMate/4.7.0 (Linux;Android 11)"
-          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) PotPlayer/230208"
-        )
+        # 播放器偽裝
+        UA="VLC/3.0.18 LibVLC/3.0.18"
         
-        SUCCESS=false
+        echo "【開始衝鋒】Tor 美國節點 + VLC 播放器特徵..."
         
-        echo "【開始衝鋒】結合 WARP 家用IP特性 + IPTV 播放器白名單特徵..."
+        # 使用 socks5h (等埋遠端 DNS 解析都在 Tor 內完成，防止 DNS 洩漏被擋)
+        curl -s -L -A "$UA" --proxy "$PROXY" --max-time 45 "$URL" > temp_file.m3u
         
-        for UA in "${UAS[@]}"; do
-          echo "正在嘗試使用播放器指紋: $UA"
-          
-          # 使用 curl 透過 WARP SOCKS5 密道(連同遠端DNS解析 socks5h)發出請求
-          curl -s -L -A "$UA" --proxy "$PROXY" --max-time 30 "$URL" > temp_file.m3u
-          
-          # 檢查回傳內容有沒有 M3U 必備的標頭
-          if grep -q "#EXTM3U" temp_file.m3u; then
-            echo "🎯 🎯 終極成功！！！順利繞過機房封鎖與瀏覽器禁令，成功下載 M3U 檔案！"
-            mv temp_file.m3u latest_file.m3u
-            SUCCESS=true
-            break
-          else
-            echo "   ↳ 失敗。回傳內容前 5 行示範（可能又是驗證碼頁面）："
-            head -n 5 temp_file.m3u | cut -c1-150
-            echo ""
-          fi
-        done
-        
-        if [ "$SUCCESS" = false ]; then
-          echo "❌ 殘念！所有播放器指紋結合 WARP 都被攔截。"
+        if grep -q "#EXTM3U" temp_file.m3u; then
+          echo "🎯 🎯 成功繞過地區與機房限制！順利拿到 M3U 檔案！"
+          mv temp_file.m3u latest_file.m3u
+        else
+          echo "❌ 依然被擋。回傳內容前 5 行示範："
+          head -n 5 temp_file.m3u | cut -c1-150
           exit 1
         fi
 
-    # Step 4: 下載成功後，照舊推上 GitHub Releases 放上網
+    # Step 5: 發布到 Release
     - name: Upload and Host File on GitHub Release
       uses: ncipollo/release-action@v1
       with:
         tag: "latest"
-        name: "最新自動下載檔案 (WARP播放器終極版)"
-        body: "此檔案結合 Cloudflare WARP 住宅流量清洗 + 真正 IPTV 播放器 (VLC/Lavf) 指紋，完美繞過機房與瀏覽器雙重封鎖自動更新。"
+        name: "最新自動下載檔案 (Tor 美國版)"
+        body: "經由 Tor 美國出口節點自動抓取更新。"
         artifacts: "latest_file.m3u"
         allowUpdates: true
         removeArtifacts: true
