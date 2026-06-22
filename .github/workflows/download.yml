@@ -29,7 +29,7 @@ jobs:
       run: |
         pip install curl_cffi
 
-    # Step 4: 運行 Python 腳本，輪流使用 IPTV 播放器嘅特徵去闖關
+    # Step 4: 運行 Python 腳本，使用實測成功的 AptvPlayer UA 闖關
     - name: Run Anti-Cloudflare Python Script
       run: |
         cat << 'EOF' > download.py
@@ -37,46 +37,33 @@ jobs:
         from curl_cffi import requests
 
         url = "https://garyshare.sharewithyou.dpdns.org/garyshare.m3u?token=worldcup2026"
+        target_ua = "AptvPlayer/1.5.4"
         
-        # 準備一堆常見嘅 IPTV 播放器 User-Agent 進行輪流測試
-        user_agents = [
-            "APTV",                                                             # 優先測試佢推薦嘅 APTV
-            "NanoTV",                                                           # 佢推薦嘅 NanoTV
-            "VLC/3.0.18 LibVLC/3.0.18",                                         # 最經典嘅 VLC 播放器
-            "AppleCoreMedia/1.0.0.21G72 (Apple TV; U; CPU OS 17_5_1 like Mac OS X)" # Apple TV 串流引擎特徵
-        ]
+        print(f"正在使用 100% 成功率嘅播放器指紋連線: {target_ua}")
         
-        success = False
-        content = ""
+        headers = {
+            "User-Agent": target_ua,
+            "Accept": "*/*",
+            "Connection": "keep-alive"
+        }
+        
+        try:
+            response = requests.get(url, headers=headers, timeout=20)
+            content = response.text
 
-        for ua in user_agents:
-            print(f"正在嘗試使用播放器特徵偽裝連線: {ua}")
-            try:
-                # 注意：呢度特登拎走左 impersonate="chrome"，因為我哋唔要扮 Chrome 瀏覽器！
-                # 我哋要純淨嘅連線加上播放器嘅 User-Agent 標頭
-                headers = {
-                    "User-Agent": ua,
-                    "Accept": "*/*",
-                    "Connection": "keep-alive"
-                }
-                response = requests.get(url, headers=headers, timeout=20)
-                content = response.text
-
-                # 如果回傳內容有 IPTV M3U 必備嘅標準開頭 #EXTM3U，即代表成功繞過
-                if "#EXTM3U" in content:
-                    print(f"🎯 成功！網站對 [{ua}] 亮起綠燈，已順利取得 M3U 檔案！")
-                    success = True
-                    break
-                else:
-                    print("   ⚠️ 失敗，返過嚟嘅依然係網頁內容而非 M3U（可能此 UA 未被放行）。")
-            except Exception as e:
-                print(f"   ❌ 連線期間發生錯誤: {e}")
-
-        if success:
-            with open("latest_file.m3u", "w", encoding="utf-8") as f:
-                f.write(content)
-        else:
-            print("❌ 慘情！所有播放器偽裝指紋都被 Cloudflare 擋落黎。")
+            # 檢查是否成功攞到 M3U 內容
+            if "#EXTM3U" in content:
+                with open("latest_file.m3u", "w", encoding="utf-8") as f:
+                    f.write(content)
+                print("🎯 🎯 完美成功！已順利用 APTV 專用 UA 取得 M3U 檔案！")
+            else:
+                print("❌ 失敗：返過嚟嘅內容依然唔係 M3U。")
+                print("【調試資訊】網頁前 200 個字元內容如下：")
+                print(content[:200])
+                sys.exit(1)
+                
+        except Exception as e:
+            print(f"❌ 連線期間發生錯誤: {e}")
             sys.exit(1)
         EOF
         python download.py
@@ -87,7 +74,7 @@ jobs:
       with:
         tag: "latest"
         name: "最新自動下載檔案 (已成功破盾)"
-        body: "此檔案由 GitHub Actions 偽裝成 APTV/NanoTV 播放器，成功繞過瀏覽器封鎖並自動更新。"
+        body: "此檔案由 GitHub Actions 偽裝成真實 APTV 播放器 (AptvPlayer/1.5.4)，成功繞過封鎖並每小時自動更新。"
         artifacts: "latest_file.m3u"
         allowUpdates: true
         removeArtifacts: true
