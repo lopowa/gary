@@ -1,74 +1,61 @@
-name: Cloudflare Bypass M3U Downloader v6 (Tor + Player Mode)
+name: M3U Downloader (Standard V2 Mode)
 
 on:
   schedule:
-    - cron: '0 * * * *' # 每小時自動執行
-  workflow_dispatch: # 容許手動執行
+    - cron: '0 * * * *' # 每小時自動執行一次
+  workflow_dispatch: # 容許你在 GitHub 網頁上手動點擊 Run 執行
 
 permissions:
   contents: write
 
 jobs:
-  tor_player_download:
+  download_job:
     runs-on: ubuntu-latest
 
     steps:
     - name: Checkout Repository
       uses: actions/checkout@v4
 
-    # Step 2: 安裝 Tor 並設定指定由「美國」節點出網
-    - name: Install and Configure Tor (Force US Exit Nodes)
+    - name: Check Runner IP
       run: |
-        sudo apt-get update && sudo apt-get install tor -y
-        
-        # 強制 Tor 只使用美國 (us) 的出口節點
-        echo "ExitNodes {us}" | sudo tee -a /etc/tor/torrc
-        echo "StrictNodes 1" | sudo tee -a /etc/tor/torrc
-        
-        # 啟動 Tor 服務 (默認會監聽本地 127.0.0.1:9050)
-        sudo systemctl restart tor
-        
-        # 等候 Tor 建立好全球加密迴路 (通常需要 15-30 秒)
-        echo "正在等待 Tor 網絡建立連線..."
-        sleep 20
+        echo "=== 當前 GitHub Actions 伺服器出口 IP ==="
+        curl -s https://ifconfig.me
+        echo -e "\n======================================="
 
-    # Step 3: 檢查經 Tor 出去嘅 IP 係咪變咗做非微軟嘅美國 IP
-    - name: Test Tor IP Connection
+    - name: Download M3U File
       run: |
-        echo "【檢查點】經由 Tor 節點出去的偽裝 IP 為："
-        curl -s --proxy socks5h://127.0.0.1:9050 https://ifconfig.me || echo "Tor 暫時未準備好"
-        echo ""
-
-    # Step 4: 透過 Tor 美國住宅特徵節點 + 播放器 User-Agent 強攻下載
-    - name: Download M3U via Tor with Player User-Agent
-      run: |
-        URL="https://garyshare.sharewithyou.dpdns.org/garyshare.m3u"
-        PROXY="socks5h://127.0.0.1:9050"
+        # 1. 設定帶有最新 Token 嘅目標網址
+        URL="https://garyshare.sharewithyou.dpdns.org/garyshare.m3u?token=worldcup2026"
         
-        # 播放器偽裝
+        # 2. 設定常規播放器 User-Agent 特徵
         UA="VLC/3.0.18 LibVLC/3.0.18"
         
-        echo "【開始衝鋒】Tor 美國節點 + VLC 播放器特徵..."
+        echo "正在發送標準 HTTP 請求至目標伺服器..."
         
-        # 使用 socks5h (等埋遠端 DNS 解析都在 Tor 內完成，防止 DNS 洩漏被擋)
-        curl -s -L -A "$UA" --proxy "$PROXY" --max-time 45 "$URL" > temp_file.m3u
-        
-        if grep -q "#EXTM3U" temp_file.m3u; then
-          echo "🎯 🎯 成功繞過地區與機房限制！順利拿到 M3U 檔案！"
-          mv temp_file.m3u latest_file.m3u
+        # 3. 執行常規下載
+        curl -s -L -A "$UA" --max-time 30 "$URL" > result_file.m3u
+
+    - name: Verify Content and Save
+      run: |
+        # 檢查回傳內容是否包含 M3U 標頭
+        if grep -q "#EXTM3U" result_file.m3u; then
+          echo "🎯 成功：成功獲取正確的 M3U 檔案結構！"
+          mv result_file.m3u latest_file.m3u
         else
-          echo "❌ 依然被擋。回傳內容前 5 行示範："
-          head -n 5 temp_file.m3u | cut -c1-150
-          exit 1
+          echo "⚠️ 警告：回傳內容不符合 M3U 格式。"
+          echo "=== 回傳內容前 10 行節錄 ==="
+          head -n 10 result_file.m3u
+          echo "============================"
+          # 依然保留檔案更名，方便你稍後在 Release 下載下來查看完整的 HTML 報錯頁面
+          mv result_file.m3u latest_file.m3u
         fi
 
-    # Step 5: 發布到 Release
-    - name: Upload and Host File on GitHub Release
+    - name: Push to GitHub Release
       uses: ncipollo/release-action@v1
       with:
         tag: "latest"
-        name: "最新自動下載檔案 (Tor 美國版)"
-        body: "經由 Tor 美國出口節點自動抓取更新。"
+        name: "M3U 自動更新測試"
+        body: "基於標準環境獲取的最新測試檔案。"
         artifacts: "latest_file.m3u"
         allowUpdates: true
         removeArtifacts: true
