@@ -1,4 +1,4 @@
-name: Cloudflare Bypass M3U Downloader v4 (IPTV Player Mode)
+name: Cloudflare Bypass M3U Downloader v5 (WARP + Player Mode)
 
 on:
   schedule:
@@ -10,7 +10,7 @@ permissions:
   contents: write # 開啟寫入權限發布到 Release
 
 jobs:
-  player_mode_download:
+  warp_player_download:
     runs-on: ubuntu-latest # 使用 GitHub 免費伺服器
 
     steps:
@@ -18,75 +18,81 @@ jobs:
     - name: Checkout Repository
       uses: actions/checkout@v4
 
-    # Step 2: 安裝 Python 環境
-    - name: Set up Python
-      uses: actions/setup-python@v5
-      with:
-        python-version: '3.10'
-
-    # Step 3: 安裝基本 requests 套件
-    - name: Install requests
-      run: pip install requests
-
-    # Step 4: 運行 Python 腳本，輪流用幾款真正播放器嘅身分去「拍門」下載
-    - name: Download using IPTV Player Identity
+    # Step 2: 安裝並啟動 Cloudflare WARP 代理，將機房 IP 徹底洗白
+    - name: Install and Setup Cloudflare WARP
       run: |
-        cat << 'EOF' > download.py
-        import sys
-        import requests
+        # 1. 導入 Cloudflare WARP 官方儲存庫
+        curl -fsSL https://pkg.cloudflareclient.com/pubkey.gpg | sudo gpg --yes --dearmor -o /usr/share/keyrings/cloudflare-warp-archive-keyring.gpg
+        echo "deb [signed-by=/usr/share/keyrings/cloudflare-warp-archive-keyring.gpg] https://pkg.cloudflareclient.com/ $(lsb_release -cs) main" | sudo tee /etc/apt/sources.list.d/cloudflare-client.list
+        
+        # 2. 安裝 WARP 客戶端
+        sudo apt-get update && sudo apt-get install cloudflare-warp -y
+        
+        # 3. 確保 WARP 系統服務已啟動
+        sudo systemctl start warp-svc
+        
+        # 4. 初始化 WARP 並設定為本地 SOCKS5 代理模式 (Port 4000)
+        warp-cli --accept-tos registration new || warp-cli --accept-tos register
+        warp-cli --accept-tos mode proxy
+        warp-cli --accept-tos connect
+        
+        # 5. 等候 5 秒讓虛擬網絡連線穩定
+        sleep 5
+        
+        # 6. 測試一下經 WARP 代理出去嘅 IP 係咪成功轉咗
+        echo "【檢查點】經 WARP 代理出去的出口 IP 為："
+        curl -s --proxy socks5h://127.0.0.1:4000 https://ifconfig.me
+        echo ""
 
-        url = "https://garyshare.sharewithyou.dpdns.org/garyshare.m3u"
+    # Step 3: 透過 WARP 密道，輪流用播放器身分強攻下載
+    - name: Download M3U via WARP with Player User-Agent
+      run: |
+        URL="https://garyshare.sharewithyou.dpdns.org/garyshare.m3u"
+        PROXY="socks5h://127.0.0.1:4000"
         
-        # 模擬真正 IPTV 播放器及相關引擎嘅 User-Agent 名單
-        player_uas = [
-            "VLC/3.0.18 LibVLC/3.0.18",                       # 經典 VLC 播放器
-            "Lavf/58.76.100",                                 # 絕大部分 Android IPTV App (如 TiviMate/Perfect Player) 內置嘅 FFmpeg 引擎特徵
-            "TiviMate/4.7.0 (Linux;Android 11)",              # TiviMate 專用特徵
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) PotPlayer/230208" # 電腦版 PotPlayer 特徵
-        ]
+        # 模擬真正 IPTV 播放器嘅 User-Agent 名單
+        UAS=(
+          "VLC/3.0.18 LibVLC/3.0.18"
+          "Lavf/58.76.100"
+          "TiviMate/4.7.0 (Linux;Android 11)"
+          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) PotPlayer/230208"
+        )
         
-        success = False
-        content = ""
+        SUCCESS=false
         
-        print("【情報確認】避開瀏覽器特徵，啟動 IPTV 播放器白名單偽裝技術...")
+        echo "【開始衝鋒】結合 WARP 家用IP特性 + IPTV 播放器白名單特徵..."
         
-        for ua in player_uas:
-            print(f"嘗試使用播放器指紋: {ua}")
-            try:
-                # 使用最純淨嘅 requests 連線，配合播放器 UA
-                response = requests.get(url, headers={"User-Agent": ua}, timeout=20)
-                res_text = response.text
-                
-                # 檢查返過嚟嘅內容係咪真係 M3U 清單
-                if "#EXTM3U" in res_text:
-                    print(f"🎯 🎯 成功！用呢個播放器指紋衝過去咗: {ua}")
-                    content = res_text
-                    success = True
-                    break
-                elif "Just a moment..." in res_text or "ie6 oldie" in res_text:
-                    print(f"   ↳ 失敗：依然被 Cloudflare 擋截（可能佢連機房 IP 都鎖埋）。")
-                else:
-                    print(f"   ↳ 成功連線，但返過嚟嘅內容好似唔係 M3U (字數: {len(res_text)})。")
-            except Exception as e:
-                print(f"   ↳ 連線出錯: {e}")
+        for UA in "${UAS[@]}"; do
+          echo "正在嘗試使用播放器指紋: $UA"
+          
+          # 使用 curl 透過 WARP SOCKS5 密道(連同遠端DNS解析 socks5h)發出請求
+          curl -s -L -A "$UA" --proxy "$PROXY" --max-time 30 "$URL" > temp_file.m3u
+          
+          # 檢查回傳內容有沒有 M3U 必備的標頭
+          if grep -q "#EXTM3U" temp_file.m3u; then
+            echo "🎯 🎯 終極成功！！！順利繞過機房封鎖與瀏覽器禁令，成功下載 M3U 檔案！"
+            mv temp_file.m3u latest_file.m3u
+            SUCCESS=true
+            break
+          else
+            echo "   ↳ 失敗。回傳內容前 5 行示範（可能又是驗證碼頁面）："
+            head -n 5 temp_file.m3u | cut -c1-150
+            echo ""
+          fi
+        done
         
-        if success:
-            with open("latest_file.m3u", "w", encoding="utf-8") as f:
-                f.write(content)
-            print("🎯 檔案下載並成功儲存！")
-        else:
-            print("❌ 殘念！所有播放器指紋都入唔到。")
-            sys.exit(1)
-        EOF
-        python download.py
+        if [ "$SUCCESS" = false ]; then
+          echo "❌ 殘念！所有播放器指紋結合 WARP 都被攔截。"
+          exit 1
+        fi
 
-    # Step 5: 下載成功後，照舊推上 GitHub Releases 放上網
+    # Step 4: 下載成功後，照舊推上 GitHub Releases 放上網
     - name: Upload and Host File on GitHub Release
       uses: ncipollo/release-action@v1
       with:
         tag: "latest"
-        name: "最新自動下載檔案 (播放器偽裝版)"
-        body: "此檔案由 GitHub Actions 偽裝成真正 IPTV 播放器 (VLC/Lavf) 繞過瀏覽器封鎖並自動更新。"
+        name: "最新自動下載檔案 (WARP播放器終極版)"
+        body: "此檔案結合 Cloudflare WARP 住宅流量清洗 + 真正 IPTV 播放器 (VLC/Lavf) 指紋，完美繞過機房與瀏覽器雙重封鎖自動更新。"
         artifacts: "latest_file.m3u"
         allowUpdates: true
         removeArtifacts: true
